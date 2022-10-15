@@ -1,6 +1,6 @@
 {
-  "name": "solidity-ts-dev-stack-example",
-  "version": "0.0.2",
+  "name": "solidity-simple-covered-call-vault",
+  "version": "0.0.1",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@openzeppelin/contracts": "^4.7.3",
+    "@openzeppelin/contracts-upgradeable": "^4.8.0-rc.1",
     "@uniswap/v2-periphery": "^1.1.0-beta.0",
     "solmate": "^6.6.1"
   },

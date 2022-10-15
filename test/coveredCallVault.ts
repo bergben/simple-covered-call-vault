@@ -4,7 +4,7 @@ import chaiAsPromised from "chai-as-promised";
 import {
   CoveredCallVault__factory,
   CoveredCallVault,
-  ERC20,
+  IERC20Upgradeable as IERC20,
 } from "../typechain";
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 import { solidity } from "ethereum-waffle";
@@ -25,8 +25,8 @@ describe("CoveredCallVault", () => {
   const bufferTime = 86400; // 1 day
   const price = 10000000; // = 10 usdc. usdc has 6 decimals
 
-  let weth: ERC20;
-  let usdc: ERC20;
+  let weth: IERC20;
+  let usdc: IERC20;
   let vault: CoveredCallVault;
   let migrationVault: CoveredCallVault;
   let startTime: number;
@@ -37,8 +37,8 @@ describe("CoveredCallVault", () => {
   let owner: SignerWithAddress;
 
   beforeEach(async () => {
-    weth = (await ethers.getContractAt("ERC20", wethAddress)) as ERC20;
-    usdc = (await ethers.getContractAt("ERC20", usdcAddress)) as ERC20;
+    weth = (await ethers.getContractAt("ERC20", wethAddress)) as IERC20;
+    usdc = (await ethers.getContractAt("ERC20", usdcAddress)) as IERC20;
 
     const signers = await ethers.getSigners();
     owner = signers[2];
@@ -75,7 +75,10 @@ describe("CoveredCallVault", () => {
     startTime = (await getCurrentBlockTime()) + 100;
     endTime = startTime + 1000;
 
-    vault = await vaultFactory.deploy(
+    vault = await vaultFactory.deploy();
+    await vault.deployed();
+
+    await vault.initialize(
       wethAddress,
       "CoveredCallVaultWETH",
       "ccvWETH",
@@ -86,7 +89,6 @@ describe("CoveredCallVault", () => {
       endTime,
       price
     );
-    await vault.deployed();
 
     const initialAssets = await vault.totalAssets();
     const initialUsdc = await vault.totalUsdc();
@@ -205,78 +207,6 @@ describe("CoveredCallVault", () => {
         .redeem(ethers.utils.parseEther("10"), user.address, user.address);
 
       expect(await vault.balanceOf(user.address)).to.equal(0);
-    });
-  });
-
-  describe("migration / upgrade", async () => {
-    before(async () => {
-      const vaultFactory = (await ethers.getContractFactory(
-        "CoveredCallVault",
-        owner
-      )) as CoveredCallVault__factory;
-
-      startTime = (await getCurrentBlockTime()) + 100;
-      endTime = startTime + 1000;
-
-      migrationVault = await vaultFactory.deploy(
-        wethAddress,
-        "CoveredCallVaultWETH",
-        "ccvWETH",
-        exchange.address,
-        bufferTime,
-        usdcAddress,
-        startTime,
-        endTime,
-        price
-      );
-    });
-
-    it("should revert scheduleMigration if not owner", async () => {
-      await expect(
-        vault.connect(exchange).scheduleMigration(migrationVault.address)
-      ).to.be.revertedWith(`UNAUTHORIZED`);
-    });
-
-    it("should schedule migration", async () => {
-      await vault.connect(owner).scheduleMigration(migrationVault.address);
-      expect(await vault.migrationTarget()).to.equal(migrationVault.address);
-    });
-
-    it("should revert execute migration if before delay", async () => {
-      await vault.connect(owner).scheduleMigration(migrationVault.address);
-
-      await expect(vault.connect(owner).executeMigration()).to.be.revertedWith(
-        `MigrationNotScheduledYet`
-      );
-    });
-
-    it("should execute migration", async () => {
-      // deposit
-      await weth
-        .connect(user)
-        .approve(vault.address, ethers.utils.parseEther("10"));
-
-      await vault
-        .connect(user)
-        .deposit(ethers.utils.parseEther("10"), user.address);
-
-      expect(await weth.balanceOf(migrationVault.address)).to.equal(0);
-      const vaultWethBalance = await weth.balanceOf(vault.address);
-
-      await vault.connect(owner).scheduleMigration(migrationVault.address);
-
-      // forward time
-      const currentBlockTime = await getCurrentBlockTime();
-      const migrateableAfter = (await vault.migrateableAfter()).toNumber();
-      if (currentBlockTime < migrateableAfter) {
-        await time.increase(migrateableAfter - currentBlockTime + 1);
-      }
-
-      // execute migration
-      await vault.connect(owner).executeMigration();
-      expect(await weth.balanceOf(migrationVault.address)).to.equal(
-        vaultWethBalance
-      );
     });
   });
 

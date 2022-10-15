@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity >=0.8.0;
 
-import "hardhat/console.sol";
-
-import {ERC20} from "solmate/src/tokens/ERC20.sol";
-import {ERC4626} from "solmate/src/mixins/ERC4626.sol";
 import {Owned} from "solmate/src/auth/Owned.sol";
-import {SafeTransferLib} from "solmate/src/utils/SafeTransferLib.sol";
 import {FixedPointMathLib} from "solmate/src/utils/FixedPointMathLib.sol";
 import {IUniswapV2Router02} from "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
-import {Pausable} from "@openzeppelin/contracts/security/Pausable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
+import {IERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
+import {SafeERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
 
 error RoundAlreadyStarted();
 error RoundNotEnded();
@@ -18,25 +17,18 @@ error InvalidParams();
 error PriceTooLow();
 error Unauthorized();
 error SwapFailed();
-error MigrationAlreadyScheduled();
-error MigrationNotScheduledYet();
 
-contract CoveredCallVault is ERC4626, Owned, Pausable {
-    using SafeTransferLib for ERC20;
+contract CoveredCallVault is ERC4626Upgradeable, Owned, PausableUpgradeable {
+    using SafeERC20Upgradeable for IERC20Upgradeable;
     using FixedPointMathLib for uint256;
-
-    /*//////////////////////////////////////////////////////////////
-                             CONSTANTS / IMMUTABLES
-    //////////////////////////////////////////////////////////////*/
-    uint256 public constant migrationDelay = 7 days;
-
-    ERC20 public immutable usdc;
-    /// @dev address = 20 bytes, tightly pack next to uint64 to tightly pack for gas savings (stored in one slot)
-    address public immutable exchangeAddress;
 
     /*//////////////////////////////////////////////////////////////
                                STATE VARIABLES
     //////////////////////////////////////////////////////////////*/
+
+    IERC20Upgradeable public usdc;
+    /// @dev address = 20 bytes, tightly pack next to uint64 to tightly pack for gas savings (stored in one slot)
+    address public exchangeAddress;
 
     /// @notice duration in seconds, assets which are not withdrawn from the smart contract roll into the next round
     /// when rollOptionsVault is called
@@ -46,9 +38,6 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
     uint256 public limitPrice;
     uint256 public endTime;
     uint256 public startTime;
-
-    uint256 public migrateableAfter;
-    address public migrationTarget;
 
     /*//////////////////////////////////////////////////////////////
                                  EVENTS
@@ -64,30 +53,32 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
         uint256 endTime
     );
 
-    event MigrationScheduled(uint256 migrateableAfter, address migrationTarget);
-    event MigrationExecuted(address migrationTarget);
-
     /*//////////////////////////////////////////////////////////////
                     CONSTRUCTOR / INITIALIZE
     //////////////////////////////////////////////////////////////*/
+    constructor() Owned(msg.sender) {}
 
-    constructor(
-        ERC20 _asset,
+    function initialize(
+        IERC20Upgradeable _asset,
         string memory _name,
         string memory _symbol,
         address _exchangeAddress,
         uint64 _bufferTime,
-        ERC20 _usdc,
+        IERC20Upgradeable _usdc,
         uint256 _startTime,
         uint256 _endTime,
         uint256 _limitPrice
-    ) ERC4626(_asset, _name, _symbol) Owned(msg.sender) {
-        exchangeAddress = _exchangeAddress;
-        usdc = _usdc;
+    ) external initializer {
+        owner = msg.sender;
 
+        __ERC4626_init(_asset);
+        __ERC20_init(_name, _symbol);
+
+        exchangeAddress = _exchangeAddress;
+        bufferTime = _bufferTime;
+        usdc = _usdc;
         startTime = _startTime;
         endTime = _endTime;
-        bufferTime = _bufferTime;
         limitPrice = _limitPrice;
     }
 
@@ -103,45 +94,8 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
     }
 
     /*//////////////////////////////////////////////////////////////
-                         UPGRADE / MIGRATE
-    //////////////////////////////////////////////////////////////*/
-
-    function scheduleMigration(address _migrationTarget) external onlyOwner {
-        if (migrateableAfter != 0) {
-            revert MigrationAlreadyScheduled();
-        }
-        if (_migrationTarget == address(0)) {
-            revert InvalidParams();
-        }
-
-        migrateableAfter = block.timestamp + migrationDelay;
-        migrationTarget = _migrationTarget;
-
-        emit MigrationScheduled(migrateableAfter, migrationTarget);
-    }
-
-    function executeMigration() external onlyOwner {
-        if (block.timestamp < migrateableAfter) {
-            revert MigrationNotScheduledYet();
-        }
-
-        asset.safeTransfer(migrationTarget, asset.balanceOf(address(this)));
-        usdc.safeTransfer(migrationTarget, usdc.balanceOf(address(this)));
-
-        delete migrationTarget;
-        delete migrateableAfter;
-
-        emit MigrationExecuted(migrationTarget);
-    }
-
-    /*//////////////////////////////////////////////////////////////
                                  READ LOGIC
     //////////////////////////////////////////////////////////////*/
-
-    function totalAssets() public view override returns (uint256) {
-        return asset.balanceOf(address(this));
-    }
-
     function totalUsdc() public view returns (uint256) {
         return usdc.balanceOf(address(this));
     }
@@ -149,7 +103,7 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
     function previewRedeemUsdc(uint256 shares) public view returns (uint256) {
         /// @dev logic below mostly taken from solmate/src/mixins/ERC4626.sol (replaced totalAssets() with totalUsdc())
 
-        uint256 supply = totalSupply; // Saves an extra SLOAD if totalSupply is non-zero.
+        uint256 supply = totalSupply(); // Saves an extra SLOAD if totalSupply is non-zero.
 
         return supply == 0 ? shares : shares.mulDivDown(totalUsdc(), supply);
     }
@@ -200,7 +154,7 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
         emit RolledForward(
             usdcSwapped,
             assetBalanceBefore,
-            asset.balanceOf(address(this)),
+            IERC20Upgradeable(asset()).balanceOf(address(this)),
             startTime,
             endTime
         );
@@ -233,7 +187,7 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
         uint256 newAllowance = usdc.allowance(address(this), msg.sender) +
             assetAmount;
 
-        asset.safeApprove(exchangeAddress, newAllowance);
+        IERC20Upgradeable(asset()).safeApprove(exchangeAddress, newAllowance);
 
         emit OptionBuy(assetAmount, price, usdcAmount);
     }
@@ -244,28 +198,32 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
 
     function deposit(uint256 assets, address receiver)
         public
+        virtual
         override
-        whenNotPaused
-        returns (uint256 shares)
+        returns (uint256)
     {
-        // Check for rounding error since we round down in previewDeposit.
-        require((shares = previewDeposit(assets)) != 0, "ZERO_SHARES");
+        require(
+            assets <= maxDeposit(receiver),
+            "ERC4626: deposit more than max"
+        );
 
-        _deposit(shares, receiver, assets);
+        uint256 shares = previewDeposit(assets);
 
-        return assets;
+        _depositWithChecks(shares, receiver, assets);
+
+        return shares;
     }
 
     function mint(uint256 shares, address receiver)
         public
+        virtual
         override
-        whenNotPaused
-        returns (uint256 assets)
+        returns (uint256)
     {
-        // No need to check for rounding error, previewMint rounds up.
-        assets = previewMint(shares);
+        require(shares <= maxMint(receiver), "ERC4626: mint more than max");
 
-        _deposit(shares, receiver, assets);
+        uint256 assets = previewMint(shares);
+        _depositWithChecks(shares, receiver, assets);
 
         return assets;
     }
@@ -274,11 +232,14 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
         uint256 assets,
         address receiver,
         address owner
-    ) public override returns (uint256 shares) {
-        // No need to check for rounding error, previewWithdraw rounds up.
-        shares = previewWithdraw(assets);
+    ) public virtual override returns (uint256) {
+        require(
+            assets <= maxWithdraw(owner),
+            "ERC4626: withdraw more than max"
+        );
 
-        _withdraw(assets, receiver, owner, shares);
+        uint256 shares = previewWithdraw(assets);
+        _withdrawWithChecks(assets, receiver, owner, shares);
 
         return shares;
     }
@@ -287,11 +248,11 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
         uint256 shares,
         address receiver,
         address owner
-    ) public override returns (uint256 assets) {
-        // Check for rounding error since we round down in previewRedeem.
-        require((assets = previewRedeem(shares)) != 0, "ZERO_ASSETS");
+    ) public virtual override returns (uint256) {
+        require(shares <= maxRedeem(owner), "ERC4626: redeem more than max");
 
-        _withdraw(assets, receiver, owner, shares);
+        uint256 assets = previewRedeem(shares);
+        _withdrawWithChecks(assets, receiver, owner, shares);
 
         return assets;
     }
@@ -320,7 +281,7 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
                            INTERNAL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-    function _deposit(
+    function _depositWithChecks(
         uint256 assets,
         address receiver,
         uint256 shares
@@ -330,17 +291,10 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
             revert RoundAlreadyStarted();
         }
 
-        // Need to transfer before minting or ERC777s could reenter.
-        asset.safeTransferFrom(msg.sender, address(this), assets);
-
-        _mint(receiver, shares);
-
-        emit Deposit(msg.sender, receiver, assets, shares);
-
-        afterDeposit(assets, shares);
+        _deposit(_msgSender(), receiver, assets, shares);
     }
 
-    function _withdraw(
+    function _withdrawWithChecks(
         uint256 assets,
         address receiver,
         address owner,
@@ -351,23 +305,9 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
             revert RoundNotEnded();
         }
 
-        /// @dev logic below mostly taken from solmate/src/mixins/ERC4626.sol (added usdc part)
-        if (msg.sender != owner) {
-            uint256 allowed = allowance[owner][msg.sender]; // Saves gas for limited approvals.
-
-            if (allowed != type(uint256).max)
-                allowance[owner][msg.sender] = allowed - shares;
-        }
-
-        beforeWithdraw(assets, shares);
-
         uint256 usdcAssets = previewRedeemUsdc(shares);
 
-        _burn(owner, shares);
-
-        emit Withdraw(msg.sender, receiver, owner, assets, shares);
-
-        asset.safeTransfer(receiver, assets);
+        _withdraw(_msgSender(), receiver, owner, assets, shares);
 
         if (usdcAssets != 0) {
             usdc.safeTransfer(receiver, usdcAssets);
@@ -392,7 +332,7 @@ contract CoveredCallVault is ERC4626, Owned, Pausable {
 
         address[] memory path = new address[](2);
         path[0] = address(usdc);
-        path[1] = address(asset);
+        path[1] = asset();
 
         uint256[] memory result = _router.swapExactTokensForTokens(
             _amountIn,
