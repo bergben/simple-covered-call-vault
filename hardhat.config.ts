@@ -7,15 +7,15 @@ import "@nomiclabs/hardhat-waffle";
 import "@typechain/hardhat";
 import "@nomiclabs/hardhat-etherscan";
 import "solidity-coverage";
+import "@nomiclabs/hardhat-web3";
 
-interface Etherscan {
+export interface Etherscan {
   etherscan: { apiKey: string | undefined };
 }
 
 type HardhatUserEtherscanConfig = HardhatUserConfig & Etherscan;
 
-
-const INFURA_API_KEY = process.env.INFURA_API_KEY || "";
+const ALCHEMY_TOKEN = process.env.ALCHEMY_TOKEN || "";
 const RINKEBY_PRIVATE_KEY =
   process.env.RINKEBY_PRIVATE_KEY! ||
   "0xc87509a1c067bbde78beb793e6fa76530b6382a4c0241e5e4a9ec0a0f44dc0d3"; // well known private key
@@ -24,15 +24,18 @@ const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY;
 const config: HardhatUserEtherscanConfig = {
   defaultNetwork: "hardhat",
   solidity: {
-    compilers: [{ version: "0.7.6", settings: {} }],
+    compilers: [{ version: "0.8.17", settings: {} }],
   },
   networks: {
-    hardhat: {},
-    localhost: {},
-    rinkeby: {
-      url: `https://rinkeby.infura.io/v3/${INFURA_API_KEY}`,
-      accounts: [RINKEBY_PRIVATE_KEY],
+    hardhat: {
+      forking: {
+        url: "https://eth-mainnet.alchemyapi.io/v2/" + ALCHEMY_TOKEN,
+        blockNumber: 15752216,
+      },
+      gasPrice: 20000000000,
+      gas: 6000000,
     },
+    localhost: {},
     coverage: {
       url: "http://127.0.0.1:8555", // Coverage launches its own ganache-cli client
     },
