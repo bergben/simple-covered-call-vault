@@ -20,6 +20,7 @@ const wethAddress = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const usdcAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 const wethWhale = "0x06920c9fc643de77b99cb7670a944ad31eaaa260";
 const usdcWhale = "0xa7c0e546196a0bdbc2cb9743bcfbf3536b577e1e";
+const uniV3SwapRouter = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
 
 describe("CoveredCallVault", () => {
   const bufferTime = 86400; // 1 day
@@ -28,7 +29,6 @@ describe("CoveredCallVault", () => {
   let weth: IERC20;
   let usdc: IERC20;
   let vault: CoveredCallVault;
-  let migrationVault: CoveredCallVault;
   let startTime: number;
   let endTime: number;
 
@@ -37,8 +37,14 @@ describe("CoveredCallVault", () => {
   let owner: SignerWithAddress;
 
   beforeEach(async () => {
-    weth = (await ethers.getContractAt("ERC20", wethAddress)) as IERC20;
-    usdc = (await ethers.getContractAt("ERC20", usdcAddress)) as IERC20;
+    weth = (await ethers.getContractAt(
+      "IERC20Upgradeable",
+      wethAddress
+    )) as IERC20;
+    usdc = (await ethers.getContractAt(
+      "IERC20Upgradeable",
+      usdcAddress
+    )) as IERC20;
 
     const signers = await ethers.getSigners();
     owner = signers[2];
@@ -285,13 +291,26 @@ describe("CoveredCallVault", () => {
   describe("rollOptionsVault", async () => {
     // should test revert for each invalid param
 
-    it("should revert if not after buffer time", async () => {
+    it("should revert if not owner", async () => {
       await expect(
         vault.connect(user).rollOptionsVault(
           startTime + 5000,
           endTime + 5000,
-          "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
-          0 // should get actual quote
+          uniV3SwapRouter,
+          0, // should get actual quote from uniV3 quoter
+          500
+        )
+      ).to.be.revertedWith(`UNAUTHORIZED`);
+    });
+
+    it("should revert if not after buffer time", async () => {
+      await expect(
+        vault.connect(owner).rollOptionsVault(
+          startTime + 5000,
+          endTime + 5000,
+          uniV3SwapRouter,
+          0, // should get actual quote from uniV3 quoter
+          500
         )
       ).to.be.revertedWith(`BufferTimeNotEnded`);
     });
@@ -304,11 +323,12 @@ describe("CoveredCallVault", () => {
 
       currentBlockTime = await getCurrentBlockTime();
 
-      await vault.connect(user).rollOptionsVault(
+      await vault.connect(owner).rollOptionsVault(
         currentBlockTime + 5000,
         currentBlockTime + 5100,
-        "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
-        1 // should get actual quote from uniV2Router
+        uniV3SwapRouter,
+        1, // should get actual quote from uniV3 quoter
+        500
       );
 
       expect(await vault.startTime()).to.equal(currentBlockTime + 5000);
@@ -343,11 +363,12 @@ describe("CoveredCallVault", () => {
 
       currentBlockTime = await getCurrentBlockTime();
 
-      await vault.connect(user).rollOptionsVault(
+      await vault.connect(owner).rollOptionsVault(
         currentBlockTime + 5000,
         currentBlockTime + 5100,
-        "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
-        1 // should get actual quote from uniV2Router
+        uniV3SwapRouter,
+        1, // should get actual quote from uniV3 quoter
+        500
       );
 
       expect(await usdc.balanceOf(vault.address)).to.equal(0);

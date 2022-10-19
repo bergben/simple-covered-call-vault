@@ -3,9 +3,8 @@ pragma solidity >=0.8.0;
 
 import {Owned} from "solmate/src/auth/Owned.sol";
 import {FixedPointMathLib} from "solmate/src/utils/FixedPointMathLib.sol";
-import {IUniswapV2Router02} from "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
+import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {IERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 import {SafeERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
@@ -115,9 +114,10 @@ contract CoveredCallVault is ERC4626Upgradeable, Owned, PausableUpgradeable {
     function rollOptionsVault(
         uint256 _startTime,
         uint256 _endTime,
-        IUniswapV2Router02 uniV2Router,
-        uint256 minSwapAmountOut
-    ) external whenNotPaused {
+        ISwapRouter uniV3Router,
+        uint256 minSwapAmountOut,
+        uint24 uniV3SwapFee
+    ) external whenNotPaused onlyOwner {
         if (block.timestamp <= endTime + bufferTime) {
             revert BufferTimeNotEnded();
         }
@@ -126,7 +126,7 @@ contract CoveredCallVault is ERC4626Upgradeable, Owned, PausableUpgradeable {
             _startTime >= _endTime ||
             _startTime < block.timestamp + 1 ||
             minSwapAmountOut == 0 ||
-            address(uniV2Router) == address(0)
+            address(uniV3Router) == address(0)
         ) {
             revert InvalidParams();
         }
@@ -137,10 +137,11 @@ contract CoveredCallVault is ERC4626Upgradeable, Owned, PausableUpgradeable {
         if (totalUsdc() != 0) {
             // convert all usdc to WETH with univ2 interface
             // only swap needed to roll forward users USDC shares to WETH because overall shares stay the same
-            _swapExactTokensForTokensUniV2(
+            _swapExactTokensForTokensUniV3(
                 usdc.balanceOf(address(this)),
                 minSwapAmountOut,
-                uniV2Router
+                uniV3Router,
+                uniV3SwapFee
             );
 
             if (totalUsdc() != 0) {
@@ -319,29 +320,29 @@ contract CoveredCallVault is ERC4626Upgradeable, Owned, PausableUpgradeable {
      *
      * @param _amountIn     The amount of input token to be spent
      * @param _minAmountOut Minimum amount of output token to receive
-     * @param _router       Address of uniV2 router to use
+     * @param _uniV3Router  Address of uniV3 router to use
      *
      * @return amountOut    The amount of output token obtained
      */
-    function _swapExactTokensForTokensUniV2(
+    function _swapExactTokensForTokensUniV3(
         uint256 _amountIn,
         uint256 _minAmountOut,
-        IUniswapV2Router02 _router
+        ISwapRouter _uniV3Router,
+        uint24 _fee
     ) internal returns (uint256) {
-        usdc.safeApprove(address(_router), _amountIn);
+        usdc.safeApprove(address(_uniV3Router), _amountIn);
 
-        address[] memory path = new address[](2);
-        path[0] = address(usdc);
-        path[1] = asset();
-
-        uint256[] memory result = _router.swapExactTokensForTokens(
-            _amountIn,
-            _minAmountOut,
-            path,
-            address(this),
-            block.timestamp
-        );
-
-        return result[result.length - 1];
+        ISwapRouter.ExactInputSingleParams memory params = ISwapRouter
+            .ExactInputSingleParams({
+                tokenIn: address(usdc),
+                tokenOut: asset(),
+                fee: _fee,
+                recipient: address(this),
+                deadline: block.timestamp,
+                amountIn: _amountIn,
+                amountOutMinimum: _minAmountOut,
+                sqrtPriceLimitX96: 0
+            });
+        return _uniV3Router.exactInputSingle(params);
     }
 }
